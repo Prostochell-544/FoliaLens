@@ -62,16 +62,24 @@ data class BridgeStatus(
 @Composable
 fun RustBridgeHealthScreen(modifier: Modifier = Modifier) {
     val (jniResult, jniSuccess, uniffiResult, uniffiSuccess) = remember {
-        val (jniRes, jniOk) = try {
-            NativeBridge.jniHealthCheck() to true
+        var jniRes: String
+        var jniOk: Boolean
+        try {
+            jniRes = NativeBridge.jniHealthCheck()
+            jniOk = true
         } catch (t: Throwable) {
-            "JNI Error: ${t.message ?: t.javaClass.simpleName}" to false
+            jniRes = "JNI Error: ${t.message ?: t.javaClass.simpleName}"
+            jniOk = false
         }
 
-        val (uniffiRes, uniffiOk) = try {
-            rustHealthCheck() to true
+        var uniffiRes: String
+        var uniffiOk: Boolean
+        try {
+            uniffiRes = rustHealthCheck()
+            uniffiOk = true
         } catch (t: Throwable) {
-            "UniFFI Error: ${t.message ?: t.javaClass.simpleName}" to false
+            uniffiRes = "UniFFI Error: ${t.message ?: t.javaClass.simpleName}"
+            uniffiOk = false
         }
 
         BridgeStatus(

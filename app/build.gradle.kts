@@ -46,10 +46,16 @@ android {
     }
 }
 
+val com.android.build.api.dsl.ApplicationExtension.ndkDirectory: java.io.File?
+    get() = project.extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.ndkDirectory
+
 val isWindows = System.getProperty("os.name").lowercase().contains("windows")
 
-val buildRustNative by tasks.registering(Exec::class) {
+val buildRustNative = tasks.register<Exec>("buildRustNative") {
     workingDir = file("../rust-core")
+    android.ndkDirectory?.let { ndkDir ->
+        environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
+    }
     if (isWindows) {
         commandLine(
             "cmd", "/c", "cargo", "ndk",
@@ -69,7 +75,7 @@ val buildRustNative by tasks.registering(Exec::class) {
     }
 }
 
-val generateUniffiBindings by tasks.registering(Exec::class) {
+val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
     dependsOn(buildRustNative)
     workingDir = file("../rust-core")
     val outDir = file("build/generated/source/uniffi/main/java")
@@ -80,6 +86,7 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
         commandLine(
             "cmd", "/c", "cargo", "run", "--bin", "uniffi-bindgen", "generate",
             "--library", "../app/src/main/jniLibs/arm64-v8a/libatlas_core.so",
+            "--config", "uniffi.toml",
             "--language", "kotlin",
             "--out-dir", "../app/build/generated/source/uniffi/main/java"
         )
@@ -87,6 +94,7 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
         commandLine(
             "cargo", "run", "--bin", "uniffi-bindgen", "generate",
             "--library", "../app/src/main/jniLibs/arm64-v8a/libatlas_core.so",
+            "--config", "uniffi.toml",
             "--language", "kotlin",
             "--out-dir", "../app/build/generated/source/uniffi/main/java"
         )
@@ -95,6 +103,11 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
 
 tasks.named("preBuild").configure {
     dependsOn(generateUniffiBindings)
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    dependsOn(generateUniffiBindings)
+    source(file("build/generated/source/uniffi/main/java"))
 }
 
 dependencies {
@@ -113,7 +126,9 @@ dependencies {
     // LiteRT (Edge-AI Inference on CPU, GPU, NPU)
     implementation("com.google.ai.edge.litert:litert:1.0.1")
     implementation("com.google.ai.edge.litert:litert-gpu:1.0.1")
-    implementation("com.google.ai.edge.litert:litert-support:1.0.1")
+    implementation("com.google.ai.edge.litert:litert-support:1.0.1") {
+        exclude(group = "com.google.ai.edge.litert", module = "litert-support-api")
+    }
 
     // CameraX 1.4.0
     val cameraxVersion = "1.4.0"
