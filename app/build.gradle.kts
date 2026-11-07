@@ -53,24 +53,21 @@ val isWindows = System.getProperty("os.name").lowercase().contains("windows")
 
 val buildRustNative = tasks.register<Exec>("buildRustNative") {
     workingDir = file("../rust-core")
+    inputs.dir(file("../rust-core/src"))
+    inputs.file(file("../rust-core/Cargo.toml"))
+    outputs.dir(file("src/main/jniLibs"))
     android.ndkDirectory?.let { ndkDir ->
         environment("ANDROID_NDK_HOME", ndkDir.absolutePath)
     }
     if (isWindows) {
         commandLine(
-            "cmd", "/c", "cargo", "ndk",
-            "-t", "arm64-v8a",
-            "-t", "x86_64",
-            "-o", "../app/src/main/jniLibs",
-            "build", "--release"
+            "cmd", "/c",
+            "cargo build --release && cargo ndk -t arm64-v8a -t x86_64 -o ../app/src/main/jniLibs build --release"
         )
     } else {
         commandLine(
-            "cargo", "ndk",
-            "-t", "arm64-v8a",
-            "-t", "x86_64",
-            "-o", "../app/src/main/jniLibs",
-            "build", "--release"
+            "sh", "-c",
+            "cargo build --release && cargo ndk -t arm64-v8a -t x86_64 -o ../app/src/main/jniLibs build --release"
         )
     }
 }
@@ -78,14 +75,18 @@ val buildRustNative = tasks.register<Exec>("buildRustNative") {
 val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
     dependsOn(buildRustNative)
     workingDir = file("../rust-core")
+    inputs.dir(file("src/main/jniLibs"))
+    inputs.file(file("../rust-core/uniffi.toml"))
     val outDir = file("build/generated/source/uniffi/main/java")
+    outputs.dir(outDir)
     doFirst {
         outDir.mkdirs()
     }
+    val hostLibPath = if (isWindows) "target/release/atlas_core.dll" else "target/release/libatlas_core.so"
     if (isWindows) {
         commandLine(
             "cmd", "/c", "cargo", "run", "--bin", "uniffi-bindgen", "generate",
-            "--library", "../app/src/main/jniLibs/arm64-v8a/libatlas_core.so",
+            "--library", hostLibPath,
             "--config", "uniffi.toml",
             "--language", "kotlin",
             "--out-dir", "../app/build/generated/source/uniffi/main/java"
@@ -93,7 +94,7 @@ val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
     } else {
         commandLine(
             "cargo", "run", "--bin", "uniffi-bindgen", "generate",
-            "--library", "../app/src/main/jniLibs/arm64-v8a/libatlas_core.so",
+            "--library", hostLibPath,
             "--config", "uniffi.toml",
             "--language", "kotlin",
             "--out-dir", "../app/build/generated/source/uniffi/main/java"
