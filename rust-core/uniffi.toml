@@ -1,0 +1,3 @@
+[bindings.kotlin]
+package_name = "com.example.folialens.core.uniffi"
+cdylib_name = "atlas_core"
