@@ -144,10 +144,10 @@ pub extern "system" fn Java_com_example_folialens_core_NativeBridge_jniHealthChe
     env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let output = env
-        .new_string("Zero-Copy JNI Bridge: OK")
-        .expect("Couldn't create java string!");
-    output.into_raw()
+    match env.new_string("Zero-Copy JNI Bridge: OK") {
+        Ok(output) => output.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 // ---------------------------------------------------------------------------

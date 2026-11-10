@@ -1,9 +1,11 @@
 package com.example.folialens
 
+import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -40,7 +43,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -54,6 +60,8 @@ import com.example.folialens.core.uniffi.TaxonDetail
 import com.example.folialens.core.uniffi.TaxonSummary
 import com.example.folialens.core.uniffi.rustHealthCheck
 import com.example.folialens.ui.theme.FoliaLensTheme
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,6 +82,19 @@ data class BridgeStatus(
     val jniSuccess: Boolean,
     val uniffiResult: String,
     val uniffiSuccess: Boolean,
+)
+
+data class MelSpectrogramUiState(
+    val bitmap: Bitmap,
+    val nMels: Int,
+    val nFrames: Int,
+    val elapsedMs: Double,
+)
+
+data class VisionBenchmarkUiState(
+    val elapsedMs: Double,
+    val sampleFloats: List<Float>,
+    val targetSize: Int,
 )
 
 @Composable
@@ -125,6 +146,12 @@ fun AtlasMainScreen(modifier: Modifier = Modifier) {
     var selectedTaxonDetail by remember { mutableStateOf<TaxonDetail?>(null) }
     var inferenceResults by remember { mutableStateOf<List<TaxonSummary>?>(null) }
 
+    // Stage 2B DSP & Vision States
+    var melState by remember { mutableStateOf<MelSpectrogramUiState?>(null) }
+    var melError by remember { mutableStateOf<String?>(null) }
+    var visionState by remember { mutableStateOf<VisionBenchmarkUiState?>(null) }
+    var visionError by remember { mutableStateOf<String?>(null) }
+
     // Initial search load
     LaunchedEffect(engine, searchQuery) {
         if (engine != null) {
@@ -152,6 +179,27 @@ fun AtlasMainScreen(modifier: Modifier = Modifier) {
                 uniffiSuccess = uniffiSuccess,
                 engineReady = engine != null,
                 engineError = engineError,
+            )
+        }
+
+        // --- STAGE 2B: ZERO-COPY DSP & VISION BENCHMARK ---
+        item {
+            Stage2bBenchmarkCard(
+                engine = engine,
+                melState = melState,
+                melError = melError,
+                onMelComputed = { state ->
+                    melState = state
+                    melError = null
+                },
+                onMelError = { err -> melError = err },
+                visionState = visionState,
+                visionError = visionError,
+                onVisionBenchmarked = { state ->
+                    visionState = state
+                    visionError = null
+                },
+                onVisionError = { err -> visionError = err },
             )
         }
 
@@ -269,6 +317,277 @@ fun AtlasMainScreen(modifier: Modifier = Modifier) {
             detail = detail,
             onDismiss = { selectedTaxonDetail = null },
         )
+    }
+}
+
+@Composable
+fun Stage2bBenchmarkCard(
+    engine: AtlasEngine?,
+    melState: MelSpectrogramUiState?,
+    melError: String?,
+    onMelComputed: (MelSpectrogramUiState) -> Unit,
+    onMelError: (String) -> Unit,
+    visionState: VisionBenchmarkUiState?,
+    visionError: String?,
+    onVisionBenchmarked: (VisionBenchmarkUiState) -> Unit,
+    onVisionError: (String) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Stage 2B: Zero-Copy DSP & Vision Benchmark",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Прямой доступ к нативным указателям через DirectByteBuffer без GC аллокаций в горячих циклах.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.2f))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // 1. Audio Mel-Spectrogram DSP
+            Text(
+                text = "1. Audio DSP: Mel-Спектрограмма (48 kHz mono)",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Button(
+                onClick = {
+                    if (engine == null) {
+                        onMelError("AtlasEngine is not initialized")
+                        return@Button
+                    }
+                    try {
+                        val durationSec = 3.0f
+                        val chirpSamples = engine.generateSyntheticBirdChirp(durationSec)
+                        val numSamples = chirpSamples.size
+                        val dims = engine.getSpectrogramDimensions(numSamples.toUInt())
+                        val nMels = dims[0].toInt()
+                        val nFrames = dims[1].toInt()
+                        val melElements = nMels * nFrames
+
+                        val pcmBuffer = ByteBuffer.allocateDirect(numSamples * 4)
+                            .order(ByteOrder.nativeOrder())
+                        val floatView = pcmBuffer.asFloatBuffer()
+                        floatView.put(chirpSamples.toFloatArray())
+                        pcmBuffer.rewind()
+
+                        val melFloatBuffer = ByteBuffer.allocateDirect(melElements * 4)
+                            .order(ByteOrder.nativeOrder())
+                        val rgbaBitmapBuffer = ByteBuffer.allocateDirect(melElements * 4)
+                            .order(ByteOrder.nativeOrder())
+
+                        val startTime = System.nanoTime()
+                        val success = NativeBridge.computeMelSpectrogramZeroCopy(
+                            pcmFloatBuffer = pcmBuffer,
+                            numSamples = numSamples,
+                            outMelFloatBuffer = melFloatBuffer,
+                            outRgbaBitmapBuffer = rgbaBitmapBuffer,
+                        )
+                        val elapsedMs = (System.nanoTime() - startTime) / 1_000_000.0
+
+                        if (!success) {
+                            onMelError("NativeBridge.computeMelSpectrogramZeroCopy returned false")
+                            return@Button
+                        }
+
+                        val bitmap = Bitmap.createBitmap(nFrames, nMels, Bitmap.Config.ARGB_8888)
+                        rgbaBitmapBuffer.rewind()
+                        bitmap.copyPixelsFromBuffer(rgbaBitmapBuffer)
+
+                        onMelComputed(
+                            MelSpectrogramUiState(
+                                bitmap = bitmap,
+                                nMels = nMels,
+                                nFrames = nFrames,
+                                elapsedMs = elapsedMs,
+                            )
+                        )
+                    } catch (t: Throwable) {
+                        onMelError("Mel Spectrogram error: ${t.message ?: t.javaClass.simpleName}")
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiary,
+                ),
+            ) {
+                Text("Synthesize Bird Chirp & Compute Spectrogram (3s @ 48kHz)")
+            }
+
+            if (melError != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = melError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (melState != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "Размер тензора: ${melState.nMels} × ${melState.nFrames} Mels | Время: ${"%.2f".format(melState.elapsedMs)} ms",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Image(
+                            bitmap = melState.bitmap.asImageBitmap(),
+                            contentDescription = "Magma Mel Spectrogram",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(melState.nFrames.toFloat() / melState.nMels.toFloat())
+                                .clip(RoundedCornerShape(6.dp)),
+                            contentScale = ContentScale.FillWidth,
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.2f))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // 2. Vision YUV_420_888 Preprocessing Benchmark
+            Text(
+                text = "2. Vision: FullHD YUV_420_888 → 224x224 RGB Tensor",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Button(
+                onClick = {
+                    try {
+                        val srcWidth = 1920
+                        val srcHeight = 1080
+                        val yRowStride = srcWidth
+                        val uvRowStride = srcWidth
+                        val uvPixelStride = 2 // NV21 / NV12 format typical for CameraX
+                        val targetSize = 224
+
+                        val yPlane = ByteBuffer.allocateDirect(yRowStride * srcHeight)
+                            .order(ByteOrder.nativeOrder())
+                        val uPlane = ByteBuffer.allocateDirect(uvRowStride * (srcHeight / 2))
+                            .order(ByteOrder.nativeOrder())
+                        val vPlane = ByteBuffer.allocateDirect(uvRowStride * (srcHeight / 2))
+                            .order(ByteOrder.nativeOrder())
+
+                        // Fill test gradient
+                        val yBytes = ByteArray(yRowStride * srcHeight) { (it % 255).toByte() }
+                        val uvBytes = ByteArray(uvRowStride * (srcHeight / 2)) { 128.toByte() }
+                        yPlane.put(yBytes).rewind()
+                        uPlane.put(uvBytes).rewind()
+                        vPlane.put(uvBytes).rewind()
+
+                        val outBufferSize = targetSize * targetSize * 3 * 4
+                        val outTensorBuffer = ByteBuffer.allocateDirect(outBufferSize)
+                            .order(ByteOrder.nativeOrder())
+
+                        val startTime = System.nanoTime()
+                        val success = NativeBridge.preprocessCameraFrameZeroCopy(
+                            yPlane = yPlane,
+                            uPlane = uPlane,
+                            vPlane = vPlane,
+                            srcWidth = srcWidth,
+                            srcHeight = srcHeight,
+                            yRowStride = yRowStride,
+                            uvRowStride = uvRowStride,
+                            uvPixelStride = uvPixelStride,
+                            outTfliteInputBuffer = outTensorBuffer,
+                            targetSize = targetSize,
+                            normalizeFp32 = true,
+                        )
+                        val elapsedMs = (System.nanoTime() - startTime) / 1_000_000.0
+
+                        if (!success) {
+                            onVisionError("NativeBridge.preprocessCameraFrameZeroCopy returned false")
+                            return@Button
+                        }
+
+                        outTensorBuffer.rewind()
+                        val floatView = outTensorBuffer.asFloatBuffer()
+                        val samples = mutableListOf<Float>()
+                        val numSamplesToRead = minOf(6, floatView.remaining())
+                        repeat(numSamplesToRead) {
+                            samples.add(floatView.get())
+                        }
+
+                        onVisionBenchmarked(
+                            VisionBenchmarkUiState(
+                                elapsedMs = elapsedMs,
+                                sampleFloats = samples,
+                                targetSize = targetSize,
+                            )
+                        )
+                    } catch (t: Throwable) {
+                        onVisionError("Vision benchmark error: ${t.message ?: t.javaClass.simpleName}")
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiary,
+                ),
+            ) {
+                Text("Benchmark Zero-Copy FullHD YUV -> 224x224 FP32")
+            }
+
+            if (visionError != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = visionError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            if (visionState != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "FullHD 1080p → ${visionState.targetSize}x${visionState.targetSize} FP32 | Время: ${"%.2f".format(visionState.elapsedMs)} ms",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Первые значения ImageNet FP32: ${visionState.sampleFloats.joinToString { "%.3f".format(it) }}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
