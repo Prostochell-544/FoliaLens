@@ -136,3 +136,4 @@ CREATE TABLE media_blobs (
 - **ABIs Supported**: `arm64-v8a` (primary target for modern 64-bit devices), `x86_64` (emulator and ChromeOS/x86 devices).
 - **UniFFI 0.28**: Exposes structured domain models (`TaxonSummary`, `Kingdom`, `SafetyStatus`, `AtlasError`) and high-level query APIs.
 - **Direct JNI**: High-throughput vision frame preprocessing (`preprocessCameraFrameZeroCopy`) bypasses UniFFI serialization overhead and operates directly on memory addresses via `java.nio.ByteBuffer.allocateDirect`.
+- **Direct JNI (audio)**: `computeMelSpectrogramZeroCopy` turns a float PCM window into a normalized log-Mel spectrogram (`[n_mels][n_frames]`, 96 bands by default) plus an optional Magma RGBA8888 bitmap buffer. Output shapes come from `AtlasEngine.getSpectrogramDimensions`; both paths share one process-wide `MelSpectrogramExtractor`.
