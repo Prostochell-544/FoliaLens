@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+# `rlib` lets in-crate binaries (build-atlas) link against the library.
+crate-type = ["cdylib", "staticlib", "rlib"]
 name = "atlas_core"
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
+
+[[bin]]
+name = "build-atlas"
+path = "src/bin/build_atlas.rs"
 
 [dependencies]
 uniffi = { version = "0.28", features = ["cli"] }

@@ -88,12 +88,16 @@ CREATE TABLE taxa (
     scientific_name   TEXT NOT NULL,              -- Binomial nomenclature (e.g. 'Boletus edulis')
     common_name_ru    TEXT NOT NULL,              -- Primary Russian name
     safety_status     TEXT NOT NULL CHECK(safety_status IN ('Neutral', 'Edible', 'Toxic', 'Deadly', 'Protected')),
+    habitat_type      INTEGER NOT NULL DEFAULT 0  -- 0 Terrestrial, 1 Freshwater, 2 Marine, 3 Wetland
+                      CHECK(habitat_type BETWEEN 0 AND 3),
     description_zstd  BLOB NOT NULL               -- High-compression Zstandard article blob
 );
 
 CREATE INDEX idx_taxa_ml_vision ON taxa(ml_vision_id);
 CREATE INDEX idx_taxa_ml_audio  ON taxa(ml_audio_id);
+CREATE INDEX idx_taxa_habitat   ON taxa(habitat_type);
 ```
+Stage 2A files without `habitat_type` are upgraded in place on open (`ALTER TABLE … DEFAULT 0`).
 
 ### 3.2. `taxa_fts` (Full-Text Search)
 Virtual table leveraging SQLite FTS5 with unicode61 tokenizer for sub-millisecond search across scientific, Russian common names, and morphology.
@@ -128,6 +132,38 @@ CREATE TABLE media_blobs (
     avif_bytes  BLOB NOT NULL                     -- AVIF format photo reference
 );
 ```
+
+### 3.5. `h3_geography` (Planetary Biogeographic Index)
+Maps every H3 resolution-4 cell to its botanical country and terrestrial, freshwater and marine ecoregions. `0` means "not applicable" (no MEOW zone inland, no TDWG/TEOW at sea).
+```sql
+CREATE TABLE h3_geography (
+    h3_index      INTEGER PRIMARY KEY,
+    tdwg_code     INTEGER NOT NULL, -- TDWG Level 3 botanical country (1..369)
+    teow_biome    INTEGER NOT NULL, -- WWF terrestrial ecoregion (1..867)
+    feow_basin    INTEGER NOT NULL, -- Freshwater ecoregion (0..426)
+    meow_zone     INTEGER NOT NULL  -- Marine ecoregion (0..232)
+) WITHOUT ROWID;
+```
+
+### 3.6. `taxon_regions` (Species Ranges by Region)
+Compact range model for tens of thousands of taxa: a species is bound to regions instead of individual cells (plants by TDWG/TEOW, freshwater taxa by FEOW, marine taxa by MEOW).
+```sql
+CREATE TABLE taxon_regions (
+    region_scheme   INTEGER NOT NULL,             -- 0 TDWG, 1 TEOW, 2 FEOW, 3 MEOW
+    region_code     INTEGER NOT NULL,
+    taxon_id        INTEGER NOT NULL REFERENCES taxa(taxon_id),
+    months_bitmask  INTEGER NOT NULL DEFAULT 4095,
+    PRIMARY KEY (region_scheme, region_code, taxon_id)
+) WITHOUT ROWID;
+```
+Region ids in the starter catalog are a provisional registry (`rust-core/src/dataset.rs`, `REGIONS`); a full import from the official shapefiles must regenerate them.
+
+### 3.7. Spatial Re-ranking (`postprocess_vision_logits`)
+1. Partial selection (`select_nth_unstable_by`) keeps the **Top-32 raw logits**, whatever the model size (iNat/BioCLIP/BirdNET scale).
+2. One SQL statement resolves those 32 classes via `idx_taxa_ml_vision` and point-looks up presence in `geo_presence` (exact cell) and `taxon_regions` (the cell's four regions from `h3_geography`).
+3. Taxa absent from the location or out of season get ×0.15; probabilities are re-normalized. Measured: ~0.15 ms per call with 50 000 logits (x86_64 host, release).
+
+The shipped `app/src/main/assets/atlas.db` is produced by `cargo run --release --bin build-atlas` (journaling off, `VACUUM`, `ANALYZE`).
 
 ---
 

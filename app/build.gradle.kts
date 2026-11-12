@@ -102,8 +102,23 @@ val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
     }
 }
 
+val generateAtlasDb = tasks.register<Exec>("generateAtlasDb") {
+    dependsOn(buildRustNative)
+    mustRunAfter(generateUniffiBindings)
+    workingDir = file("../rust-core")
+    inputs.dir(file("../rust-core/src"))
+    inputs.file(file("../rust-core/Cargo.toml"))
+    outputs.file(file("src/main/assets/atlas.db"))
+    if (isWindows) {
+        commandLine("cmd", "/c", "cargo", "run", "--release", "--bin", "build-atlas")
+    } else {
+        commandLine("cargo", "run", "--release", "--bin", "build-atlas")
+    }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(generateUniffiBindings)
+    dependsOn(generateAtlasDb)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod dataset;
 pub mod db;
 pub mod geo;
 pub mod vision;
@@ -30,6 +31,42 @@ pub enum SafetyStatus {
     Toxic,
     Deadly,
     Protected,
+}
+
+/// Ecological niche of a taxon, stored as `taxa.habitat_type` (codes 0..=3).
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HabitatType {
+    /// 0 — land (Суша).
+    Terrestrial,
+    /// 1 — rivers, lakes, ponds (Пресный водоём).
+    Freshwater,
+    /// 2 — seas and oceans (Морская среда).
+    Marine,
+    /// 3 — marshes, bogs, shores with emergent vegetation (Водно-болотные угодья).
+    Wetland,
+}
+
+impl HabitatType {
+    pub const ALL: [HabitatType; 4] = [
+        HabitatType::Terrestrial,
+        HabitatType::Freshwater,
+        HabitatType::Marine,
+        HabitatType::Wetland,
+    ];
+
+    /// Integer code stored in `taxa.habitat_type`.
+    pub const fn code(self) -> i64 {
+        match self {
+            HabitatType::Terrestrial => 0,
+            HabitatType::Freshwater => 1,
+            HabitatType::Marine => 2,
+            HabitatType::Wetland => 3,
+        }
+    }
+
+    pub fn from_code(code: i64) -> Option<Self> {
+        Self::ALL.into_iter().find(|h| h.code() == code)
+    }
 }
 
 #[derive(uniffi::Record, Debug, Clone)]
@@ -136,6 +173,35 @@ impl AtlasEngine {
     ) -> Result<Vec<TaxonSummary>, AtlasError> {
         self.db
             .postprocess_vision_logits(&logits, lat, lon, month, top_k)
+    }
+
+    /// Same as [`Self::postprocess_vision_logits`], but keeps only taxa whose habitat is
+    /// in `habitats` (empty = no filter), e.g. `[Freshwater, Wetland]` at a pond shore.
+    pub fn postprocess_vision_logits_in_habitats(
+        &self,
+        logits: Vec<f32>,
+        lat: Option<f64>,
+        lon: Option<f64>,
+        month: u8,
+        top_k: u32,
+        habitats: Vec<HabitatType>,
+    ) -> Result<Vec<TaxonSummary>, AtlasError> {
+        self.db
+            .postprocess_vision_logits_in_habitats(&logits, lat, lon, month, top_k, &habitats)
+    }
+
+    /// Lists taxa of one ecosystem ordered by `taxon_id`.
+    pub fn list_taxa_by_habitat(
+        &self,
+        habitat: HabitatType,
+        limit: u32,
+    ) -> Result<Vec<TaxonSummary>, AtlasError> {
+        self.db.list_taxa_by_habitat(habitat, limit)
+    }
+
+    /// Habitat of a single taxon (not part of `TaxonSummary` to keep that record stable).
+    pub fn get_taxon_habitat(&self, taxon_id: i64) -> Result<HabitatType, AtlasError> {
+        self.db.get_taxon_habitat(taxon_id)
     }
 }
 
